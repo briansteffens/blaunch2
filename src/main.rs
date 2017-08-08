@@ -11,13 +11,20 @@ use gtk::prelude::*;
 use gtk::{Entry, Label, Window, ScrolledWindow, WindowType, Box, Orientation};
 
 const KEY_ESCAPE: u32 = 65307;
+const KEY_ENTER : u32 = 65293;
 
-#[derive(Deserialize, PartialEq, Eq, Debug)]
+#[derive(Deserialize, PartialEq, Eq, Debug, Clone)]
 struct Node {
     shortcut: String,
     description: String,
     command: Option<String>,
     children: Option<Vec<Node>>,
+}
+
+#[derive(Deserialize, Clone)]
+struct Config {
+    shell_prefix: String,
+    menu: Vec<Node>,
 }
 
 fn borrow_nodes(nodes: &Vec<Node>) -> Vec<&Node> {
@@ -75,16 +82,20 @@ fn resolve<'a>(nodes: Vec<&'a Node>, command: String) -> Resolved {
     Resolved::Partial(partial)
 }
 
-fn update_output(output_lines: &Box, nodes: Vec<&Node>) {
-    let labels = output_lines.get_children();
+fn clear_output(output: &Box) {
+    let labels = output.get_children();
 
     for label in labels {
         label.destroy();
     }
+}
+
+fn set_output_nodes(output: &Box, nodes: Vec<&Node>) {
+    clear_output(output);
 
     for node in nodes {
         let outer = Box::new(Orientation::Horizontal, 0);
-        output_lines.add(&outer);
+        output.add(&outer);
 
         let shortcut_text: &str = &node.shortcut;
         let shortcut = Label::new(shortcut_text);
@@ -97,16 +108,25 @@ fn update_output(output_lines: &Box, nodes: Vec<&Node>) {
         outer.add(&description);
     }
 
-    output_lines.show_all();
+    output.show_all();
+}
+
+fn set_output_text(output: &Box, text: &str) {
+    clear_output(output);
+
+    let label = Label::new(text);
+    output.add(&label);
+
+    output.show_all();
 }
 
 fn main() {
-    let menu_file = File::open("menu.json").
-        expect("Can't open /etc/blaunch/menu.json");
+    let config_file = File::open("/etc/blaunch.json").
+        expect("Can't open /etc/blaunch.json");
 
-    let root: Vec<Node> = match serde_json::from_reader(menu_file) {
+    let config: Config = match serde_json::from_reader(config_file) {
         Ok(n)  => n,
-        Err(e) => panic!("Can't parse /etc/blaunch/menu.json: {}", e),
+        Err(e) => panic!("Can't parse /etc/blaunch.json: {}", e),
     };
 
     if gtk::init().is_err() {
@@ -115,9 +135,8 @@ fn main() {
     }
 
     let window = Window::new(WindowType::Toplevel);
-    window.set_title("First GTK+ Program");
+    window.set_title("blaunch");
     window.set_default_size(350, 200);
-    window.set_size_request(0, 0);
 
     let vbox = Box::new(Orientation::Vertical, 0);
     window.add(&vbox);
@@ -132,7 +151,7 @@ fn main() {
     let output_lines = Box::new(Orientation::Vertical, 0);
     scrolled.add(&output_lines);
 
-    update_output(&output_lines, borrow_nodes(&root));
+    set_output_nodes(&output_lines, borrow_nodes(&config.menu));
 
     command.grab_focus();
 
@@ -142,10 +161,18 @@ fn main() {
         Inhibit(false)
     });
 
+    let c_config = config.clone();
     command.connect_changed(move |c| {
         let value = c.get_text().unwrap_or("".to_string());
 
-        match resolve(borrow_nodes(&root), value) {
+        // Handle shell prefix
+        if value.starts_with(&c_config.shell_prefix) {
+            set_output_text(&output_lines, "Enter a shell command..");
+            return;
+        }
+
+        // Handle menu matching
+        match resolve(borrow_nodes(&c_config.menu), value) {
             Resolved::Complete(n) => {
                 let command = match n.command {
                     Some(ref c) => c,
@@ -153,21 +180,36 @@ fn main() {
                 };
 
                 match Command::new(command).spawn() {
-                    Ok (_) => println!("launched"),
+                    Ok (_) => {},
                     Err(e) => panic!("Can't start process: {}", e),
                 };
 
                 gtk::main_quit();
             },
             Resolved::Partial(nodes) => {
-                update_output(&output_lines, nodes);
+                set_output_nodes(&output_lines, nodes);
             },
         };
     });
 
-    command.connect_key_press_event(|_, e| {
+    let kp_config = config.clone();
+    command.connect_key_press_event(move |c, e| {
         if e.get_keyval() == KEY_ESCAPE {
             gtk::main_quit();
+        }
+
+        if e.get_keyval() == KEY_ENTER {
+            let value = c.get_text().unwrap_or("".to_string());
+
+            if value.starts_with(&kp_config.shell_prefix) {
+                let command: String = value.chars().skip(
+                        kp_config.shell_prefix.len()).collect();
+
+                match Command::new("sh").arg("-c").arg(command).spawn() {
+                    Ok (_) => gtk::main_quit(),
+                    Err(e) => panic!("Can't start process: {}", e),
+                };
+            }
         }
 
         Inhibit(false)

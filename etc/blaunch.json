@@ -1,0 +1,20 @@
+{
+    "shell_prefix": "f",
+    "menu": [{
+        "shortcut": "w",
+        "description": "web browsers",
+        "children": [{
+            "shortcut": "c",
+            "description": "chrome",
+            "command": "chromium"
+        },{
+            "shortcut": "f",
+            "description": "firefox",
+            "command": "firefox"
+        }]
+    },{
+        "shortcut": "t",
+        "description": "terminal",
+        "command": "xfce4-terminal"
+    }]
+}
